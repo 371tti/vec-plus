@@ -1,3 +1,4 @@
+#[allow(unused_variables)]
 pub trait Math<T> {
     fn u128_dot(&self, other: &Self) -> u128 {unimplemented!()}
     fn u64_dot(&self, other: &Self) -> u64 {unimplemented!()}

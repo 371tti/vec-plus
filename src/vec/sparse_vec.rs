@@ -1,8 +1,6 @@
 use std::{cmp::Ordering, marker::PhantomData};
-use num::Num;
 
-use serde::{de::value, Deserialize, Serialize};
-use super::vec_trait::Math;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct ZeroSparseVec<T>
