@@ -140,6 +140,9 @@ impl<T: Default + PartialEq + Clone> DefaultSparseVec<T> {
                     ptr::copy(  self.ind_ptr().offset(src),
                                 self.ind_ptr().offset(dst),
                                 count);
+                    for offset in (i+1)..(self.raw_len + 1) {
+                        *self.ind_ptr().offset(offset as isize) += 1;
+                    }
                     if self.default == elem {
                         ptr::write(self.val_ptr().offset(i as isize), elem);
                         ptr::write(self.ind_ptr().offset(i as isize), index);
@@ -159,8 +162,13 @@ impl<T: Default + PartialEq + Clone> DefaultSparseVec<T> {
                         ptr::copy(  self.ind_ptr().offset(src),
                                     self.ind_ptr().offset(dst),
                                     count);
-                        ptr::write(self.val_ptr().offset(i as isize), elem);
-                        ptr::write(self.ind_ptr().offset(i as isize), index);
+                        for offset in (i+1)..(self.raw_len + 1) {
+                            *self.ind_ptr().offset(offset as isize) += 1;
+                        }
+                        if self.default == elem {
+                            ptr::write(self.val_ptr().offset(i as isize), elem);
+                            ptr::write(self.ind_ptr().offset(i as isize), index);
+                        }
                     }
                     self.raw_len += 1;
                 } else {
