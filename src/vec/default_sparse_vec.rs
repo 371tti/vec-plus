@@ -21,14 +21,20 @@ impl<T: Default + PartialEq + Clone> DefaultSparseVec<T> {
 
     fn cap(&self) -> usize { self.buf.cap }
 
-    // ind_binary_searchメソッドの実装
-    // 返り値はポインタの位置
+    /// ind_binary_searchメソッドの実装
+    /// 返り値は「該当indexが見つかったら Ok(要素位置)、
+    ///  見つからなければ Err(挿入すべき要素位置)」
     fn ind_binary_search(&self, index: &usize) -> Result<usize, usize> {
+        // 要素が無い場合は「まだどこにも挿入されていない」ので Err(0)
+        if self.raw_len == 0 {
+            return Err(0);
+        }
+
         let mut left = 0;
         let mut right = self.raw_len - 1;
         while left < right {
             let mid = left + (right - left) / 2;
-            let mid_index = unsafe {ptr::read(self.ind_ptr().offset(mid as isize))};
+            let mid_index = unsafe { ptr::read(self.ind_ptr().add(mid)) };
             if mid_index == *index {
                 return Ok(mid);
             } else if mid_index < *index {
@@ -37,7 +43,16 @@ impl<T: Default + PartialEq + Clone> DefaultSparseVec<T> {
                 right = mid;
             }
         }
-        Err(left)
+
+        // ループ終了後 left == right の位置になっている
+        let final_index = unsafe { ptr::read(self.ind_ptr().add(left)) };
+        if final_index == *index {
+            Ok(left)
+        } else if final_index < *index {
+            Err(left + 1)
+        } else {
+            Err(left)
+        }
     }
 
     /// newメソッドの実装
@@ -93,7 +108,7 @@ impl<T: Default + PartialEq + Clone> DefaultSparseVec<T> {
         if self.raw_len == self.cap() {
             self.buf.grow();
         }
-        if self.default == elem {
+        if self.default != elem {
             unsafe {
                 ptr::write(self.val_ptr().offset(self.raw_len as isize), elem);
                 ptr::write(self.ind_ptr().offset(self.raw_len as isize), self.len);
@@ -122,69 +137,176 @@ impl<T: Default + PartialEq + Clone> DefaultSparseVec<T> {
         pop_elem
     }
 
-    /// insertメソッドの実装
-    pub fn insert(&mut self, index: usize, elem: T) {
-        assert!(index <= self.len, "index out of bounds");
-        if self.raw_len == self.cap() {
-            self.buf.grow();
+    /// getメソッドの実装
+    pub fn get(&self, index: usize) -> Option<&T> {
+        if index >= self.len {
+            return None;
         }
         match self.ind_binary_search(&index) {
             Ok(i) => {
+                let val = unsafe { &*self.val_ptr().offset(i as isize) };
+                Some(val)
+            }
+            Err(_) => Some(&self.default),
+        }
+    }
+
+    /// insertメソッド
+    /// 「index 番目に新しい要素を割り込む」という動作
+    /// スパース配列なので“非デフォルト値”ならインデックス配列に挿入
+    /// デフォルト値なら挿入しない ( = スパース化 )
+    pub fn insert(&mut self, index: usize, elem: T) {
+        assert!(index <= self.len, "index out of bounds");
+
+        // 全体長は常に +1
+        self.len += 1;
+
+        // デフォルト値ならスパース化、何もしないで return
+        if elem == self.default {
+            return;
+        }
+
+        // raw 配列に格納する
+        if self.raw_len == self.cap() {
+            self.buf.grow();
+        }
+
+        match self.ind_binary_search(&index) {
+            // すでに同じ index がある => “後ろへ押し出し” して新要素を挿入
+            Ok(i) => {
                 unsafe {
                     let src = i as isize;
-                    let dst = i as isize + 1;
+                    let dst = src + 1;
                     let count = self.raw_len - i;
-                    ptr::copy(  self.val_ptr().offset(src),
-                                self.val_ptr().offset(dst),
-                                count);
-                    ptr::copy(  self.ind_ptr().offset(src),
-                                self.ind_ptr().offset(dst),
-                                count);
-                    for offset in (i+1)..(self.raw_len + 1) {
+
+                    // 値もインデックスもまとめて1つ後ろへシフト
+                    ptr::copy(
+                        self.val_ptr().offset(src),
+                        self.val_ptr().offset(dst),
+                        count,
+                    );
+                    ptr::copy(
+                        self.ind_ptr().offset(src),
+                        self.ind_ptr().offset(dst),
+                        count,
+                    );
+
+                    // シフトされた要素たちの “index 値” を +1 (論理的に後ろへ)
+                    for offset in (i + 1)..(self.raw_len + 1) {
                         *self.ind_ptr().offset(offset as isize) += 1;
                     }
-                    if self.default == elem {
-                        ptr::write(self.val_ptr().offset(i as isize), elem);
-                        ptr::write(self.ind_ptr().offset(i as isize), index);
-                    }
+
+                    // 新規挿入
+                    ptr::write(self.val_ptr().offset(i as isize), elem);
+                    ptr::write(self.ind_ptr().offset(i as isize), index);
                 }
                 self.raw_len += 1;
-            },
+            }
             Err(i) => {
                 if i < self.raw_len {
                     unsafe {
                         let src = i as isize;
-                        let dst = i as isize + 1;
+                        let dst = src + 1;
                         let count = self.raw_len - i;
-                        ptr::copy(  self.val_ptr().offset(src),
-                                    self.val_ptr().offset(dst),
-                                    count);
-                        ptr::copy(  self.ind_ptr().offset(src),
-                                    self.ind_ptr().offset(dst),
-                                    count);
-                        for offset in (i+1)..(self.raw_len + 1) {
+
+                        ptr::copy(
+                            self.val_ptr().offset(src),
+                            self.val_ptr().offset(dst),
+                            count,
+                        );
+                        ptr::copy(
+                            self.ind_ptr().offset(src),
+                            self.ind_ptr().offset(dst),
+                            count,
+                        );
+                        for offset in (i + 1)..(self.raw_len + 1) {
                             *self.ind_ptr().offset(offset as isize) += 1;
                         }
-                        if self.default == elem {
-                            ptr::write(self.val_ptr().offset(i as isize), elem);
-                            ptr::write(self.ind_ptr().offset(i as isize), index);
-                        }
+
+                        ptr::write(self.val_ptr().offset(i as isize), elem);
+                        ptr::write(self.ind_ptr().offset(i as isize), index);
                     }
                     self.raw_len += 1;
                 } else {
-                    if self.default == elem {
-                        unsafe {
-                            ptr::write(self.val_ptr().offset(self.raw_len as isize), elem);
-                            ptr::write(self.ind_ptr().offset(self.raw_len as isize), index);
-                        }
-                        self.raw_len += 1;
+                    // i == self.raw_len なら末尾に追記 (index が最大)
+                    unsafe {
+                        ptr::write(self.val_ptr().offset(self.raw_len as isize), elem);
+                        ptr::write(self.ind_ptr().offset(self.raw_len as isize), index);
                     }
+                    self.raw_len += 1;
                 }
             }
         }
     }
 
-    // iterメソッドの実装
+    /// removeメソッド
+    /// 
+    /// `index` 番目の要素を削除し、削除した要素を返します。
+    /// - 論理インデックス `index` が物理的に存在すれば、その値を返す
+    /// - 物理的になければ（= デフォルト扱いだった）デフォルト値を返す
+    /// 
+    /// いずれにせよ後ろの要素（論理インデックスが `index` より大きい要素）は
+    /// インデックスを 1 つ前にシフトします。
+    pub fn remove(&mut self, index: usize) -> T {
+        assert!(index < self.len, "index out of bounds");
+        
+        // 論理的な要素数は常に1つ減る
+        self.len -= 1;
+
+        match self.ind_binary_search(&index) {
+            Ok(i) => {
+                // 今回削除する要素を読みだす
+                let removed_val = unsafe {
+                    ptr::read(self.val_ptr().offset(i as isize))
+                };
+
+                // `i` 番目を削除するので、後ろを前にシフト
+                let count = self.raw_len - i - 1;
+                if count > 0 {
+                    unsafe {
+                        // 値をコピーして前につめる
+                        ptr::copy(
+                            self.val_ptr().offset(i as isize + 1),
+                            self.val_ptr().offset(i as isize),
+                            count
+                        );
+                        // インデックスもコピーして前につめる
+                        ptr::copy(
+                            self.ind_ptr().offset(i as isize + 1),
+                            self.ind_ptr().offset(i as isize),
+                            count
+                        );
+                        // シフトした後のインデックスは全て -1 (1つ前に詰める)
+                        for offset in i..(self.raw_len - 1) {
+                            *self.ind_ptr().offset(offset as isize) -= 1;
+                        }
+                    }
+                }
+                // 物理的な要素数は 1 減
+                self.raw_len -= 1;
+
+                // 取り除いた要素を返す
+                removed_val
+            }
+            Err(i) => {
+                // index は詰める必要があるので、i 以降の要素のインデックスを -1
+                // （たとえば “要素自体は無い” けど、後ろにある要素は
+                //  論理インデックスが 1 つ前になる）
+                if i < self.raw_len {
+                    unsafe {
+                        for offset in i..self.raw_len {
+                            *self.ind_ptr().offset(offset as isize) -= 1;
+                        }
+                    }
+                }
+
+                // “もともと物理要素が無い” のだから、デフォルト値を返す
+                self.default.clone()
+            }
+        }
+    }
+
+    // iterメソッドの実装(仮)
     pub fn iter(&self) -> impl Iterator<Item = (&usize, &T)> {
         (0..self.raw_len).map(move |i| {
             let val: &T = unsafe { &*self.val_ptr().offset(i as isize) };
@@ -193,6 +315,7 @@ impl<T: Default + PartialEq + Clone> DefaultSparseVec<T> {
         })
     }
 
+    // iter_mutメソッドの実装(仮)
     pub fn iter_mut(&mut self) -> impl Iterator<Item = (&mut usize, &mut T)> {
         (0..self.raw_len).map(move |i| {
             let val: &mut T = unsafe { &mut *self.val_ptr().offset(i as isize) };
@@ -208,23 +331,23 @@ impl<T: Default + PartialEq + Clone> Drop for DefaultSparseVec<T> {
     }
 }
 
-impl<T: Default + PartialEq + Clone> Deref for DefaultSparseVec<T> {
-    type Target = [T];
+// impl<T: Default + PartialEq + Clone> Deref for DefaultSparseVec<T> {
+//     type Target = [T];
 
-    fn deref(&self) -> &[T] {
-        unsafe {
-            std::slice::from_raw_parts(self.val_ptr(), self.len)
-        }
-    }
-}
+//     fn deref(&self) -> &[T] {
+//         unsafe {
+//             std::slice::from_raw_parts(self.val_ptr(), self.len)
+//         }
+//     }
+// }
 
-impl <T: Default + PartialEq + Clone> DerefMut for DefaultSparseVec<T> {
-    fn deref_mut(&mut self) -> &mut [T] {
-        unsafe {
-            std::slice::from_raw_parts_mut(self.val_ptr(), self.len)
-        }
-    }
-}
+// impl <T: Default + PartialEq + Clone> DerefMut for DefaultSparseVec<T> {
+//     fn deref_mut(&mut self) -> &mut [T] {
+//         unsafe {
+//             std::slice::from_raw_parts_mut(self.val_ptr(), self.len)
+//         }
+//     }
+// }
 
 impl <T: Default + PartialEq + Clone> Default for DefaultSparseVec<T> {
     fn default() -> Self {
