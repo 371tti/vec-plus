@@ -1,4 +1,4 @@
-use std::{alloc::{alloc, dealloc, realloc, Layout}, default, marker::PhantomData, mem, num::NonZero, ops::{Deref, DerefMut}, ptr::{self, NonNull}};
+use std::{alloc::{alloc, dealloc, realloc, Layout}, default, fmt::{self, Debug}, marker::PhantomData, mem, num::NonZero, ops::{Deref, DerefMut}, ptr::{self, NonNull}};
 use super::normal_vec_trait::NormalVecMethods;
 
 /// <T> のdefault値をスパースするSparseVectorの実装
@@ -6,7 +6,7 @@ use super::normal_vec_trait::NormalVecMethods;
 /// src : https://doc.rust-jp.rs/rust-nomicon-ja/vec.html
 ///     : https://doc.rust-lang.org/std/vec/struct.Vec.html
 
-#[derive(Debug, Clone, Hash)]
+#[derive(Clone, Hash)]
 pub struct DefaultSparseVec<T: Default + PartialEq + Clone> {
     buf: RawDefaultSparseVec<T>,
     raw_len: usize,
@@ -151,35 +151,23 @@ impl<T: Default + PartialEq + Clone> DefaultSparseVec<T> {
         }
     }
 
-    /// insertメソッド
-    /// 「index 番目に新しい要素を割り込む」という動作
-    /// スパース配列なので“非デフォルト値”ならインデックス配列に挿入
-    /// デフォルト値なら挿入しない ( = スパース化 )
-    pub fn insert(&mut self, index: usize, elem: T) {
-        assert!(index <= self.len, "index out of bounds");
-
-        // 全体長は常に +1
-        self.len += 1;
-
-        // デフォルト値ならスパース化、何もしないで return
-        if elem == self.default {
-            return;
+    pub fn get_mut(&mut self, index: usize) -> Option<&mut T> {
+        if index >= self.len {
+            return None;
         }
-
-        // raw 配列に格納する
-        if self.raw_len == self.cap() {
-            self.buf.grow();
-        }
-
         match self.ind_binary_search(&index) {
-            // すでに同じ index がある => “後ろへ押し出し” して新要素を挿入
             Ok(i) => {
+                let val = unsafe { &mut *self.val_ptr().offset(i as isize) };
+                Some(val)
+            }
+            Err(i) => {
+                if self.raw_len == self.cap() {
+                    self.buf.grow();
+                }
                 unsafe {
                     let src = i as isize;
                     let dst = src + 1;
                     let count = self.raw_len - i;
-
-                    // 値もインデックスもまとめて1つ後ろへシフト
                     ptr::copy(
                         self.val_ptr().offset(src),
                         self.val_ptr().offset(dst),
@@ -190,52 +178,74 @@ impl<T: Default + PartialEq + Clone> DefaultSparseVec<T> {
                         self.ind_ptr().offset(dst),
                         count,
                     );
-
-                    // シフトされた要素たちの “index 値” を +1 (論理的に後ろへ)
-                    for offset in (i + 1)..(self.raw_len + 1) {
-                        *self.ind_ptr().offset(offset as isize) += 1;
-                    }
-
-                    // 新規挿入
-                    ptr::write(self.val_ptr().offset(i as isize), elem);
+                    ptr::write(self.val_ptr().offset(i as isize), self.default.clone());
                     ptr::write(self.ind_ptr().offset(i as isize), index);
                 }
                 self.raw_len += 1;
-            }
-            Err(i) => {
-                if i < self.raw_len {
-                    unsafe {
-                        let src = i as isize;
-                        let dst = src + 1;
-                        let count = self.raw_len - i;
+                let val = unsafe { &mut *self.val_ptr().offset(i as isize) };
+                Some(val)
+            },
+        }
+    }
 
-                        ptr::copy(
-                            self.val_ptr().offset(src),
-                            self.val_ptr().offset(dst),
-                            count,
-                        );
-                        ptr::copy(
-                            self.ind_ptr().offset(src),
-                            self.ind_ptr().offset(dst),
-                            count,
-                        );
-                        for offset in (i + 1)..(self.raw_len + 1) {
-                            *self.ind_ptr().offset(offset as isize) += 1;
-                        }
+    /// insertメソッド
+    /// 「index 番目に新しい要素を割り込む」という動作
+    /// - 後続要素のインデックスは常に +1 シフト
+    /// - `elem` が非デフォルト値なら物理領域に書き込む (raw_len += 1)
+    /// - `elem` がデフォルト値なら物理領域には書き込まない（スパース化）
+    ///
+    pub fn insert(&mut self, index: usize, elem: T) {
+        assert!(index <= self.len, "index out of bounds");
 
-                        ptr::write(self.val_ptr().offset(i as isize), elem);
-                        ptr::write(self.ind_ptr().offset(i as isize), index);
-                    }
-                    self.raw_len += 1;
-                } else {
-                    // i == self.raw_len なら末尾に追記 (index が最大)
-                    unsafe {
-                        ptr::write(self.val_ptr().offset(self.raw_len as isize), elem);
-                        ptr::write(self.ind_ptr().offset(self.raw_len as isize), index);
-                    }
-                    self.raw_len += 1;
-                }
+        // 挿入により論理的な長さは常に +1
+        self.len += 1;
+
+        // シフト時に書き込み先が必要なので、raw_len == cap なら grow する
+        if self.raw_len == self.cap() {
+            self.buf.grow();
+        }
+
+        // ind_binary_search で挿入ポイント i を特定
+        // (すでに同じ index があっても、そこに割り込む)
+        let i = match self.ind_binary_search(&index) {
+            Ok(pos) => pos,
+            Err(pos) => pos,
+        };
+
+        unsafe {
+            // まず後ろの要素をまとめて1つ後ろへシフト
+            let src = i as isize;
+            let dst = src + 1;
+            let count = self.raw_len - i;
+
+            // 値をコピー (memmove 相当)
+            ptr::copy(
+                self.val_ptr().offset(src),
+                self.val_ptr().offset(dst),
+                count,
+            );
+            // インデックスをコピー
+            ptr::copy(
+                self.ind_ptr().offset(src),
+                self.ind_ptr().offset(dst),
+                count,
+            );
+
+            // シフトされた要素のインデックス値を +1
+            for offset in (i + 1)..(self.raw_len + 1) {
+                *self.ind_ptr().offset(offset as isize) += 1;
             }
+        }
+
+        // `elem` がデフォルト値なら物理的には書き込まずスパース化
+        if elem != self.default {
+            unsafe {
+                // シフトしたスロット i に書き込み
+                ptr::write(self.val_ptr().offset(i as isize), elem);
+                ptr::write(self.ind_ptr().offset(i as isize), index);
+            }
+            // 非デフォルト値なので raw_len も増やす
+            self.raw_len += 1;
         }
     }
 
@@ -328,6 +338,12 @@ impl<T: Default + PartialEq + Clone> DefaultSparseVec<T> {
 impl<T: Default + PartialEq + Clone> Drop for DefaultSparseVec<T> {
     fn drop(&mut self) {
         while let Some(_) = self.pop() {}
+    }
+}
+
+impl<T: Default + PartialEq + Clone + Debug> Debug for DefaultSparseVec<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_list().entries((0..self.len).map(|i| self.get(i).unwrap())).finish()
     }
 }
 
