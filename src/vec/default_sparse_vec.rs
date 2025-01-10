@@ -151,6 +151,10 @@ impl<T: Default + PartialEq + Clone> DefaultSparseVec<T> {
         }
     }
 
+    // get_mutメソッドの実装
+    // このメソッドは、指定されたインデックスの要素を変更するために使用されます。
+    // ! : スパース分部の要素をわたすためにわざと値を生成します
+    // ! : 無駄にデフォルト値を生成するので、このメソッドは避けるべきです
     pub fn get_mut(&mut self, index: usize) -> Option<&mut T> {
         if index >= self.len {
             return None;
