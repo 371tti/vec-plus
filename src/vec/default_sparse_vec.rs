@@ -9,7 +9,7 @@ use super::{normal_vec_trait::NormalVecMethods, vec_trait::Math};
 /// src : https://doc.rust-jp.rs/rust-nomicon-ja/vec.html
 ///     : https://doc.rust-lang.org/std/vec/struct.Vec.html
 
-#[derive(Clone)]
+
 pub struct DefaultSparseVec<T: Default + PartialEq + Clone> {
     buf: RawDefaultSparseVec<T>,
     raw_len: usize,
@@ -497,6 +497,21 @@ impl<T: Default + PartialEq + Clone> DefaultSparseVec<T> {
 unsafe impl<T: Send + Default + PartialEq + Clone> Send for DefaultSparseVec<T> {}
 unsafe impl<T: Send + Default + PartialEq + Clone> Sync for DefaultSparseVec<T> {}
 
+impl<T: Default + PartialEq + Clone> Clone for DefaultSparseVec<T> {
+    fn clone(&self) -> Self {
+        // RawDefaultSparseVec を「deep_clone」して新しいポインタを持たせる
+        let new_buf = self.buf.deep_clone(self.raw_len);
+
+        DefaultSparseVec {
+            buf: new_buf,
+            raw_len: self.raw_len,
+            len: self.len,
+            default: self.default.clone(),
+        }
+    }
+}
+
+
 impl<T: Default + PartialEq + Clone> Drop for DefaultSparseVec<T> {
     #[inline(always)]
     fn drop(&mut self) {
@@ -662,7 +677,7 @@ impl<T> Math<T> for DefaultSparseVec<T>
 /// ind_ptr: スパースするデータのインデックスのポインタ
 /// cap: スパースするデータの容量
 /// _marker: 所有権管理用のPhantomData
-#[derive(Debug, Clone, )]
+#[derive(Debug,)]
 struct RawDefaultSparseVec<T> {
     val_ptr: NonNull<T>,
     ind_ptr: NonNull<usize>,
@@ -777,6 +792,32 @@ impl<T> RawDefaultSparseVec<T> {
             }
             self.val_ptr = NonNull::new_unchecked(new_val_ptr);
             self.ind_ptr = NonNull::new_unchecked(new_ind_ptr);
+        }
+    }
+
+    fn deep_clone(&self, raw_len: usize) -> Self {
+        unsafe {
+            // self.cap 分のメモリを新規に確保 (alloc or realloc)
+            let val_elem_size = mem::size_of::<T>();
+            let ind_elem_size = mem::size_of::<usize>();
+            let t_align = mem::align_of::<T>();
+            let usize_align = mem::align_of::<usize>();
+            let val_layout = Layout::from_size_align(val_elem_size * self.cap, t_align).unwrap();
+            let ind_layout = Layout::from_size_align(ind_elem_size * self.cap, usize_align).unwrap();
+
+            let new_val_ptr = alloc(val_layout) as *mut T;
+            let new_ind_ptr = alloc(ind_layout) as *mut usize;
+
+            // 今の (val_ptr, ind_ptr) から raw_len 個ぶんコピーする
+            ptr::copy_nonoverlapping(self.val_ptr.as_ptr(), new_val_ptr, raw_len);
+            ptr::copy_nonoverlapping(self.ind_ptr.as_ptr(), new_ind_ptr, raw_len);
+
+            RawDefaultSparseVec {
+                val_ptr: NonNull::new_unchecked(new_val_ptr),
+                ind_ptr: NonNull::new_unchecked(new_ind_ptr),
+                cap: self.cap,
+                _marker: PhantomData,
+            }
         }
     }
 }
