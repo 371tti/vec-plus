@@ -119,7 +119,7 @@ impl<T: Default + PartialEq + Clone> DefaultSparseVec<T> {
     pub fn shrink_to_fit(&mut self) {
         if self.raw_len < self.cap() {
             self.buf.cap = self.raw_len;
-            self.buf.cap_set();
+            self.buf.re_cap_set();
         }
     }
 
@@ -552,6 +552,7 @@ impl<T: Default + PartialEq + Clone> From<Vec<T>> for DefaultSparseVec<T> {
     fn from(vec: Vec<T>) -> Self {
         let mut svec = DefaultSparseVec::new();
         vec.into_iter().for_each(|elem| svec.push(elem));
+        svec.shrink_to_fit();
         svec
     }
 }
@@ -561,6 +562,7 @@ impl<T: Default + PartialEq + Clone> From<HashMap<usize, T>> for DefaultSparseVe
     fn from(map: HashMap<usize, T>) -> Self {
         let mut svec = DefaultSparseVec::new();
         map.into_iter().for_each(|(index, elem)| svec.insert(index, elem));
+        svec.shrink_to_fit();
         svec
     }
 }
