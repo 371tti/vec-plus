@@ -1,6 +1,8 @@
 use std::{alloc::{alloc, dealloc, realloc, Layout}, collections::HashMap, fmt::{self, Debug}, marker::PhantomData, mem, ops::{Index, IndexMut}, ptr::{self, NonNull}};
 
-use super::normal_vec_trait::NormalVecMethods;
+use num::Num;
+
+use super::{normal_vec_trait::NormalVecMethods, vec_trait::Math};
 
 /// <T> のdefault値をスパースするSparseVectorの実装
 /// Vecの実装を参考にします
@@ -621,6 +623,33 @@ impl<T: Default + PartialEq + Clone> NormalVecMethods<T> for DefaultSparseVec<T>
     #[inline(always)]
     fn n_insert(&mut self, index: usize, elem: T) {
         self.insert(index, elem);
+    }
+}
+
+impl<T> Math<T> for DefaultSparseVec<T>
+    where
+    T: Num + Default + PartialEq + Clone + std::ops::AddAssign + std::ops::Mul<Output = T> + Into<u64>,
+{
+    #[inline(always)]
+    fn u64_dot(&self, other: &Self) -> u64 {
+        let mut sum: u64 = 0;
+        let mut self_iter = self.iter();
+        let mut other_iter = other.iter();
+        let mut self_current = self_iter.next();
+        let mut other_current = other_iter.next();
+
+        while self_current.is_some() && other_current.is_some() {
+            if self_current.unwrap().0 < other_current.unwrap().0 {
+                self_current = self_iter.next();
+            } else if self_current.unwrap().0 > other_current.unwrap().0 {
+                other_current = other_iter.next();
+            } else {
+                sum += (self_current.unwrap().1.clone() * other_current.unwrap().1.clone()).into();
+                self_current = self_iter.next();
+                other_current = other_iter.next();
+            }
+        }
+        sum
     }
 }
 
