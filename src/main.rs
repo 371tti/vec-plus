@@ -13,5 +13,7 @@ fn main() {
     println!("{}", svec.get(0).unwrap());
     let a = svec.get_mut(2).unwrap();
     *a = 100;
+    let vec = vec![1, 2, 3, 4, 5];
+    svec.extend(vec);
     println!("{:?}", svec);
 }

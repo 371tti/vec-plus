@@ -1,4 +1,5 @@
-use std::{alloc::{alloc, dealloc, realloc, Layout}, default, fmt::{self, Debug}, marker::PhantomData, mem, num::NonZero, ops::{Deref, DerefMut}, ptr::{self, NonNull}};
+use std::{alloc::{alloc, dealloc, realloc, Layout}, collections::HashMap, fmt::{self, Debug}, marker::PhantomData, mem, ops::{Index, IndexMut}, ptr::{self, NonNull}};
+
 use super::normal_vec_trait::NormalVecMethods;
 
 /// <T> のdefault値をスパースするSparseVectorの実装
@@ -6,7 +7,7 @@ use super::normal_vec_trait::NormalVecMethods;
 /// src : https://doc.rust-jp.rs/rust-nomicon-ja/vec.html
 ///     : https://doc.rust-lang.org/std/vec/struct.Vec.html
 
-#[derive(Clone, Hash)]
+#[derive(Clone)]
 pub struct DefaultSparseVec<T: Default + PartialEq + Clone> {
     buf: RawDefaultSparseVec<T>,
     raw_len: usize,
@@ -15,15 +16,19 @@ pub struct DefaultSparseVec<T: Default + PartialEq + Clone> {
 }
 
 impl<T: Default + PartialEq + Clone> DefaultSparseVec<T> {
+    #[inline(always)]
     fn val_ptr(&self) -> *mut T { self.buf.val_ptr.as_ptr() }
 
+    #[inline(always)]
     fn ind_ptr(&self) -> *mut usize { self.buf.ind_ptr.as_ptr() }
 
+    #[inline(always)]
     fn cap(&self) -> usize { self.buf.cap }
 
     /// ind_binary_searchメソッドの実装
     /// 返り値は「該当indexが見つかったら Ok(要素位置)、
     ///  見つからなければ Err(挿入すべき要素位置)」
+    #[inline(always)]
     fn ind_binary_search(&self, index: &usize) -> Result<usize, usize> {
         // 要素が無い場合は「まだどこにも挿入されていない」ので Err(0)
         if self.raw_len == 0 {
@@ -56,6 +61,7 @@ impl<T: Default + PartialEq + Clone> DefaultSparseVec<T> {
     }
 
     /// newメソッドの実装
+    #[inline(always)]
     pub fn new() -> Self {
         DefaultSparseVec {
             buf: RawDefaultSparseVec::new(),
@@ -65,6 +71,7 @@ impl<T: Default + PartialEq + Clone> DefaultSparseVec<T> {
         }
     }
 
+    #[inline(always)]
     pub fn with_capacity(cap: usize) -> Self {
         let mut vec = DefaultSparseVec {
             buf: RawDefaultSparseVec::new(),
@@ -78,32 +85,63 @@ impl<T: Default + PartialEq + Clone> DefaultSparseVec<T> {
     }
 
     // is_emptyメソッドの実装
+    #[inline(always)]
     pub fn is_empty(&self) -> bool {
         self.len == 0
     }
 
-    /// is_someメソッドの実装
-    pub fn is_some(&self) -> bool {
-        self.len != 0
+    /// capacityメソッドの実装
+    /// スパースベクトルの現在の容量を取得
+    #[inline(always)]
+    pub fn capacity(&self) -> usize {
+        self.cap()
+    }
+
+    /// reserveメソッドの実装
+    /// スパースベクトルの容量を増やす
+    /// 既に確保されている容量よりも小さい場合は何もしない
+    /// 既に確保されている容量よりも大きい場合は、新しい容量に再確保する
+    #[inline(always)]
+    pub fn reserve(&mut self, additional: usize) {
+        let new_cap = self.raw_len + additional;
+        if new_cap > self.cap() {
+            self.buf.cap = new_cap;
+            self.buf.re_cap_set();
+        }
+    }
+
+    /// shrink_to_fitメソッドの実装
+    /// スパースベクトルの容量を現在の長さに合わせる
+    /// 既に確保されている容量と現在の長さが同じ場合は何もしない
+    #[inline(always)]
+    pub fn shrink_to_fit(&mut self) {
+        if self.raw_len < self.cap() {
+            self.buf.cap = self.raw_len;
+            self.buf.cap_set();
+        }
     }
 
     /// nnzメソッドの実装
     /// スパースベクトル長の取得
+    #[inline(always)]
     pub fn nnz(&self) -> usize {
         self.raw_len
     }
 
     /// lenメソッドの実装
+    #[inline(always)]
     pub fn len(&self) -> usize {
         self.len
     }
 
     /// clearメソッドの実装
+    #[inline(always)]
     pub fn clear(&mut self) {
         while let Some(_) = self.pop() {}
     }
 
     /// pushメソッドの実装
+    #[inline(always)]
     pub fn push(&mut self, elem: T) {
         if self.raw_len == self.cap() {
             self.buf.grow();
@@ -119,6 +157,7 @@ impl<T: Default + PartialEq + Clone> DefaultSparseVec<T> {
     }
 
     /// popメソッドの実装
+    #[inline(always)]
     pub fn pop(&mut self) -> Option<T> {
         if self.len == 0 {
             return None;
@@ -138,6 +177,7 @@ impl<T: Default + PartialEq + Clone> DefaultSparseVec<T> {
     }
 
     /// getメソッドの実装
+    #[inline(always)]
     pub fn get(&self, index: usize) -> Option<&T> {
         if index >= self.len {
             return None;
@@ -155,6 +195,10 @@ impl<T: Default + PartialEq + Clone> DefaultSparseVec<T> {
     // このメソッドは、指定されたインデックスの要素を変更するために使用されます。
     // ! : スパース分部の要素をわたすためにわざと値を生成します
     // ! : 無駄にデフォルト値を生成するので、このメソッドは避けるべきです
+    #[deprecated(note = "このメソッドは避けるべきです. 
+                        スパース分部の実値を渡すため、スパース分部の値を無駄に生成します.
+                        default値以外を代入する場合は問題ありません.")]
+    #[inline(always)]
     pub fn get_mut(&mut self, index: usize) -> Option<&mut T> {
         if index >= self.len {
             return None;
@@ -198,6 +242,7 @@ impl<T: Default + PartialEq + Clone> DefaultSparseVec<T> {
     /// - `elem` が非デフォルト値なら物理領域に書き込む (raw_len += 1)
     /// - `elem` がデフォルト値なら物理領域には書き込まない（スパース化）
     ///
+    #[inline(always)]
     pub fn insert(&mut self, index: usize, elem: T) {
         assert!(index <= self.len, "index out of bounds");
 
@@ -261,6 +306,7 @@ impl<T: Default + PartialEq + Clone> DefaultSparseVec<T> {
     /// 
     /// いずれにせよ後ろの要素（論理インデックスが `index` より大きい要素）は
     /// インデックスを 1 つ前にシフトします。
+    #[inline(always)]
     pub fn remove(&mut self, index: usize) -> T {
         assert!(index < self.len, "index out of bounds");
         
@@ -320,7 +366,82 @@ impl<T: Default + PartialEq + Clone> DefaultSparseVec<T> {
         }
     }
 
-    // iterメソッドの実装(仮)
+    /// 2つのスパースベクタを “連結” する append 実装例
+    /// - `other` は消費 (ムーブ) して、自分に要素をつけ足す
+    /// - `other` のインデックスは自分の `len` 分だけシフト
+    #[inline(always)]
+    pub fn append(&mut self, other: Self) {
+        let other_len = other.len();
+        let other_raw_len = other.nnz();
+        let other_default = other.default.clone();
+
+        // 1) 相手が空なら何もしないで終了
+        if other_len == 0 {
+            return;
+        }
+
+        // 2) デフォルト値が異なる場合はエラーとする
+        //    (同じスパース化の基準でなければ連結できない)
+        assert!(
+            self.default == other_default,
+            "default value mismatch"
+        );
+
+        // 3) “論理インデックス” の連結位置を決める (ここでは self.len)
+        let offset = self.len;
+
+        // 4) 自分の長さ (論理) は other 分だけ伸びる
+        self.len += other_len;
+
+        // 5) キャパが足りなければ拡張
+        //    raw_len + other_raw_len 分必要
+        if self.raw_len + other_raw_len > self.cap() {
+            // 例えば reserve は “cap が足りない分だけ” 確保するようにする
+            self.reserve(self.raw_len + other_raw_len - self.cap());
+        }
+
+        // 6) 相手が物理的にも空でなければ(= other_raw_len>0) コピーする
+        if other_raw_len > 0 {
+            unsafe {
+                // まず、相手の ind_ptr / val_ptr からコピー
+                //   - コピー先は self.ind_ptr().add(self.raw_len)
+                //   - コピー元は other.ind_ptr()
+                ptr::copy(
+                    other.ind_ptr(),
+                    self.ind_ptr().add(self.raw_len),
+                    other_raw_len,
+                );
+                ptr::copy(
+                    other.val_ptr(),
+                    self.val_ptr().add(self.raw_len),
+                    other_raw_len,
+                );
+
+                // コピーされたインデックスをすべて offset だけ + する
+                for i in 0..other_raw_len {
+                    *self.ind_ptr().add(self.raw_len + i) += offset;
+                }
+            }
+
+            // raw_len も伸ばす
+            self.raw_len += other_raw_len;
+        }
+    }
+
+    /// extendメソッドの実装
+    pub fn extend<I>(&mut self, iter: I)
+    where
+        I: IntoIterator<Item = T>,
+    {
+        for elem in iter {
+            self.push(elem);
+        }
+    }
+
+    /// iterメソッドの実装(仮)
+    /// スパース分部を含みません
+    /// スパース分部が必要な場合はNormalVecMethods trait実装
+    #[inline(always)]
     pub fn iter(&self) -> impl Iterator<Item = (&usize, &T)> {
         (0..self.raw_len).map(move |i| {
             let val: &T = unsafe { &*self.val_ptr().offset(i as isize) };
@@ -329,7 +450,10 @@ impl<T: Default + PartialEq + Clone> DefaultSparseVec<T> {
         })
     }
 
-    // iter_mutメソッドの実装(仮)
+    /// iter_mutメソッドの実装(仮)
+    /// スパース分部を含みません
+    /// スパース分部が必要な場合はNormalVecMethods trait実装
+    #[inline(always)]
     pub fn iter_mut(&mut self) -> impl Iterator<Item = (&mut usize, &mut T)> {
         (0..self.raw_len).map(move |i| {
             let val: &mut T = unsafe { &mut *self.val_ptr().offset(i as isize) };
@@ -337,9 +461,42 @@ impl<T: Default + PartialEq + Clone> DefaultSparseVec<T> {
             (ind, val)
         })
     }
+
+    //// as_sliceメソッドの実装
+    #[inline(always)]
+    pub fn as_slice_val(&self) -> &[T] {
+        unsafe {
+            std::slice::from_raw_parts(self.val_ptr(), self.raw_len)
+        }
+    }
+
+    #[inline(always)]
+    pub fn as_slice_ind(&self) -> &[usize] {
+        unsafe {
+            std::slice::from_raw_parts(self.ind_ptr(), self.raw_len)
+        }
+    }
+
+    #[inline(always)]
+    pub fn as_mut_slice_val(&mut self) -> &mut [T] {
+        unsafe {
+            std::slice::from_raw_parts_mut(self.val_ptr(), self.raw_len)
+        }
+    }
+
+    #[inline(always)]
+    pub fn as_mut_slice_ind(&mut self) -> &mut [usize] {
+        unsafe {
+            std::slice::from_raw_parts_mut(self.ind_ptr(), self.raw_len)
+        }
+    }
 }
 
+unsafe impl<T: Send + Default + PartialEq + Clone> Send for DefaultSparseVec<T> {}
+unsafe impl<T: Send + Default + PartialEq + Clone> Sync for DefaultSparseVec<T> {}
+
 impl<T: Default + PartialEq + Clone> Drop for DefaultSparseVec<T> {
+    #[inline(always)]
     fn drop(&mut self) {
         while let Some(_) = self.pop() {}
     }
@@ -347,35 +504,87 @@ impl<T: Default + PartialEq + Clone> Drop for DefaultSparseVec<T> {
 
 impl<T: Default + PartialEq + Clone + Debug> Debug for DefaultSparseVec<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_list().entries((0..self.len).map(|i| self.get(i).unwrap())).finish()
+        if f.sign_plus() {
+            f.debug_struct("DefaultSparseVec")
+                .field("buf", &self.buf)
+                .field("raw_len", &self.raw_len)
+                .field("len", &self.len)
+                .field("default", &self.default)
+                .finish()
+        } else if f.alternate() {
+            write!(f, "DefaultSparseVec({:?})", self.iter().collect::<Vec<_>>())
+        } else {
+            f.debug_list().entries((0..self.len).map(|i| self.get(i).unwrap())).finish()
+        }
     }
 }
 
-// impl<T: Default + PartialEq + Clone> Deref for DefaultSparseVec<T> {
-//     type Target = [T];
+impl<T: Default + PartialEq + Clone> Index<usize> for DefaultSparseVec<T> {
+    type Output = T;
 
-//     fn deref(&self) -> &[T] {
-//         unsafe {
-//             std::slice::from_raw_parts(self.val_ptr(), self.len)
-//         }
-//     }
-// }
+    #[inline(always)]
+    fn index(&self, index: usize) -> &Self::Output {
+        self.get(index).expect("index out of bounds")
+    }
+}
 
-// impl <T: Default + PartialEq + Clone> DerefMut for DefaultSparseVec<T> {
-//     fn deref_mut(&mut self) -> &mut [T] {
-//         unsafe {
-//             std::slice::from_raw_parts_mut(self.val_ptr(), self.len)
-//         }
-//     }
-// }
+impl<T: Default + PartialEq + Clone> IndexMut<usize> for DefaultSparseVec<T> {
+    /// #warning
+    /// このメソッドは、非推奨のget_mutメソッドを使用しています
+    #[inline(always)]
+    #[warn(deprecated)]
+    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
+        self.get_mut(index).expect("index out of bounds")
+    }
+}
 
 impl <T: Default + PartialEq + Clone> Default for DefaultSparseVec<T> {
+    #[inline(always)]
     fn default() -> Self {
         Self::new()
     }
 }
 
+impl<T: Default + PartialEq + Clone> From<Vec<T>> for DefaultSparseVec<T> {
+    #[inline(always)]
+    fn from(vec: Vec<T>) -> Self {
+        let mut svec = DefaultSparseVec::new();
+        vec.into_iter().for_each(|elem| svec.push(elem));
+        svec
+    }
+}
+
+impl<T: Default + PartialEq + Clone> From<HashMap<usize, T>> for DefaultSparseVec<T> {
+    #[inline(always)]
+    fn from(map: HashMap<usize, T>) -> Self {
+        let mut svec = DefaultSparseVec::new();
+        map.into_iter().for_each(|(index, elem)| svec.insert(index, elem));
+        svec
+    }
+}
+
+impl<T: Default + PartialEq + Clone> Into<Vec<T>> for DefaultSparseVec<T> {
+    #[inline(always)]
+    fn into(self) -> Vec<T> {
+        let mut vec = Vec::new();
+        (0..self.len()).for_each(|i| vec.push(self.get(i).unwrap().clone()));
+        vec
+    }
+}
+
+impl<T: Default + PartialEq + Clone> Into<HashMap<usize, T>> for DefaultSparseVec<T> {
+    #[inline(always)]
+    fn into(self) -> HashMap<usize, T> {
+        let mut map = HashMap::new();
+        self.iter().for_each(|(index, elem)| {
+            map.insert(*index, elem.clone());
+        });
+        map
+    }
+}
+
 impl<T: Default + PartialEq + Clone> NormalVecMethods<T> for DefaultSparseVec<T> {
+    #[inline(always)]
     fn n_push(&mut self, elem: T) {
         if self.raw_len == self.cap() {
             self.buf.grow();
@@ -390,6 +599,7 @@ impl<T: Default + PartialEq + Clone> NormalVecMethods<T> for DefaultSparseVec<T>
         self.len += 1;
     }
 
+    #[inline(always)]
     fn n_pop(&mut self) -> Option<T> {
         if self.len == 0 {
             return None;
@@ -408,12 +618,11 @@ impl<T: Default + PartialEq + Clone> NormalVecMethods<T> for DefaultSparseVec<T>
         pop_elem
     }
 
+    #[inline(always)]
     fn n_insert(&mut self, index: usize, elem: T) {
         self.insert(index, elem);
     }
 }
-
-
 
 
 /// RawDefaultSparseVec構造体の定義
@@ -422,7 +631,7 @@ impl<T: Default + PartialEq + Clone> NormalVecMethods<T> for DefaultSparseVec<T>
 /// ind_ptr: スパースするデータのインデックスのポインタ
 /// cap: スパースするデータの容量
 /// _marker: 所有権管理用のPhantomData
-#[derive(Debug, Clone, Hash)]
+#[derive(Debug, Clone, )]
 struct RawDefaultSparseVec<T> {
     val_ptr: NonNull<T>,
     ind_ptr: NonNull<usize>,
@@ -435,6 +644,7 @@ struct RawDefaultSparseVec<T> {
 }
 
 impl<T> RawDefaultSparseVec<T> {
+    #[inline(always)]
     fn new() -> Self {
         // 効率化: zero size struct (ZST)をusize::MAXと定義 ある種のフラグとして使用
         let cap = if mem::size_of::<T>() == 0 { std::usize::MAX } else { 0 }; 
@@ -449,6 +659,7 @@ impl<T> RawDefaultSparseVec<T> {
         }
     }
 
+    #[inline(always)]
     fn grow(&mut self) {
         unsafe {
             let val_elem_size = mem::size_of::<T>();
@@ -496,6 +707,7 @@ impl<T> RawDefaultSparseVec<T> {
         }
     }
 
+    #[inline(always)]
     fn cap_set(&mut self) {
         unsafe {
             let val_elem_size = mem::size_of::<T>();
@@ -515,9 +727,34 @@ impl<T> RawDefaultSparseVec<T> {
             self.ind_ptr = NonNull::new_unchecked(new_ind_ptr);
         }
     }
+
+    #[inline(always)]
+    fn re_cap_set(&mut self) {
+        unsafe {
+            let val_elem_size = mem::size_of::<T>();
+            let ind_elem_size = mem::size_of::<usize>();
+
+            let t_align = mem::align_of::<T>();
+            let usize_align = mem::align_of::<usize>();
+
+            let new_val_layout = Layout::from_size_align(val_elem_size * self.cap, t_align).expect("Failed to create memory layout");
+            let new_ind_layout = Layout::from_size_align(ind_elem_size * self.cap, usize_align).expect("Failed to create memory layout");
+            let new_val_ptr = realloc(self.val_ptr.as_ptr() as *mut u8, new_val_layout, val_elem_size * self.cap) as *mut T;
+            let new_ind_ptr = realloc(self.ind_ptr.as_ptr() as *mut u8, new_ind_layout, ind_elem_size * self.cap) as *mut usize;
+            if new_val_ptr.is_null() || new_ind_ptr.is_null() {
+                oom();
+            }
+            self.val_ptr = NonNull::new_unchecked(new_val_ptr);
+            self.ind_ptr = NonNull::new_unchecked(new_ind_ptr);
+        }
+    }
 }
 
+unsafe impl<T: Send> Send for RawDefaultSparseVec<T> {}
+unsafe impl<T: Sync> Sync for RawDefaultSparseVec<T> {}
+
 impl<T> Drop for RawDefaultSparseVec<T> {
+    #[inline(always)]
     fn drop(&mut self) {
         let val_elem_size = mem::size_of::<T>();
         let ind_elem_size = mem::size_of::<usize>();
