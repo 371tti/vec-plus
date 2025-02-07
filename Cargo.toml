@@ -2,6 +2,12 @@
 name = "vec-plus"
 version = "0.1.0"
 edition = "2021"
+description = "add some vec type"
+license = "MIT"
+repository = "https://github.com/371tti/vec-plus"
+keywords = ["type", "vec", "spares"]
+
+
 
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }
